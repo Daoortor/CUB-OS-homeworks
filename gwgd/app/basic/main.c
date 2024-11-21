@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "player.h"
+#include "../../lib/lib.h"
+#include "../../util/player.h"
 #include "main.h"
 
 #include <stdio.h>
@@ -9,33 +10,53 @@
 #include <errno.h>
 #include <string.h>
 #include <pthread.h>
-#include <netinet/in.h>
 
 struct config config = {
     BLOCKING, 8888, 0, {}, {}
 };
 
-int safe_parse_ulong_option(char flag, unsigned long *result) {
-    errno = 0;
-    char *endptr = 0;
-    *result = strtoul(optarg, &endptr, INT_BASE);
-    if (*endptr != '\0') {
-        config.error_option = flag;
-        strncpy(config.error_arg, optarg, BUFFER_SIZE - 1);
-        return INVALID_ARGUMENT_VALUE;
-    }
-    if (errno == EINVAL) {
-        config.error_option = flag;
-        strncpy(config.error_arg, optarg, BUFFER_SIZE - 1);
-        return INVALID_ARGUMENT_VALUE;
-    }
-    if (errno == ERANGE) {
-        config.error_option = flag;
-        strncpy(config.error_arg, optarg, BUFFER_SIZE - 1);
-        return ARGUMENT_OUT_OF_RANGE;
-    }
-    return SUCCESS;
-}
+void eh_invalid_option() {}
+void eh_argument_out_of_range() { fprintf(stderr, "%s: -%c: argument %s out of range\n", config.program_name, config.error_option, config.error_arg); }
+void eh_invalid_argument_value() { fprintf(stderr, "%s: -%c: invalid argument %s\n", config.program_name, config.error_option, config.error_arg); }
+void eh_conflicting_options() { fprintf(stderr, "%s: -%c: option conflicting with %s\n", config.program_name, config.error_option, config.error_arg); }
+void eh_unexpected_argument() { fprintf(stderr, "%s: unexpected argument %s\n", config.program_name, config.error_arg); }
+void eh_insufficient_memory() { fprintf(stderr, "%s: not enough memory\n", config.program_name); }
+void eh_thread_error() { fprintf(stderr, "%s: thread error\n", config.program_name); }
+void eh_system_not_supported() { fprintf(stderr, "%s: system not supported\n", config.program_name); }
+void eh_interrupted() { fprintf(stderr, "%s: interrupted\n", config.program_name); }
+void eh_permission_denied() { fprintf(stderr, "%s: permission denied\n", config.program_name); }
+void eh_unsupported_address_family() { fprintf(stderr, "%s: unsupported address family\n", config.program_name); }
+void eh_opened_files_limit_reached() { fprintf(stderr, "%s: system-wide limit on the number of open files or file descriptors reached\n", config.program_name); }
+void eh_socket_bind_failed() { fprintf(stderr, "%s: socket bind failed (perhaps this port is already in use?)\n", config.program_name); }
+void eh_port_in_use() { fprintf(stderr, "%s: port %lu is already in use\n", config.program_name, config.port); }
+void eh_fork_error() { fprintf(stderr, "%s: port %lu is already in use\n", config.program_name, config.port); }
+void eh_pipe_error() { fprintf(stderr, "%s: pipe error\n", config.program_name); }
+void eh_unknown_error() { fprintf(stderr, "%s: unknown error\n", config.program_name); }
+
+struct error_handler error_handlers[SMALL_BUFFER_SIZE] = {
+    {INVALID_OPTION, eh_invalid_option},
+    {ARGUMENT_OUT_OF_RANGE, eh_argument_out_of_range},
+    {INVALID_ARGUMENT_VALUE, eh_invalid_argument_value},
+    {CONFLICTING_OPTIONS, eh_conflicting_options},
+    {UNEXPECTED_ARGUMENT, eh_unexpected_argument},
+    {INSUFFICIENT_MEMORY, eh_insufficient_memory},
+    {THREAD_ERROR, eh_thread_error},
+    {SYSTEM_NOT_SUPPORTED, eh_system_not_supported},
+    {INTERRUPTED, eh_interrupted},
+    {PERMISSION_DENIED, eh_permission_denied},
+    {UNSUPPORTED_ADDRESS_FAMILY, eh_unsupported_address_family},
+    {OPENED_FILES_LIMIT_REACHED, eh_opened_files_limit_reached},
+    {SOCKET_BIND_FAILED, eh_socket_bind_failed},
+    {PORT_IN_USE, eh_port_in_use},
+    {FORK_ERROR, eh_fork_error},
+    {PIPE_ERROR, eh_pipe_error},
+    {UNKNOWN_ERROR, eh_unknown_error},
+    {-1, NULL}
+};
+
+char *error_option = &config.error_option;
+char *error_arg_ptr = config.error_arg;
+char **error_arg = &error_arg_ptr;
 
 int parse_flags(int argc, char **argv) {
     strcpy(config.program_name, argv[0]);
@@ -61,7 +82,7 @@ int parse_flags(int argc, char **argv) {
                 }
                 if (config.port > 65535) {
                     config.error_option = flag;
-                    snprintf(config.error_arg, BUFFER_SIZE, "%u", code);
+                    snprintf(config.error_arg, BUFFER_SIZE, "%lu", config.port);
                     return ARGUMENT_OUT_OF_RANGE;
                 }
                 break;
@@ -74,63 +95,6 @@ int parse_flags(int argc, char **argv) {
         return UNEXPECTED_ARGUMENT;
     }
     return SUCCESS;
-}
-
-int process_error(enum error error) {
-    switch (error) {
-        case INVALID_OPTION:
-            return EXIT_FAILURE;
-        case ARGUMENT_OUT_OF_RANGE:
-            fprintf(stderr, "%s: -%c: argument %s out of range\n", config.program_name, config.error_option, config.error_arg);
-            return EXIT_FAILURE;
-        case INVALID_ARGUMENT_VALUE:
-            fprintf(stderr, "%s: -%c: invalid argument %s\n", config.program_name, config.error_option, config.error_arg);
-            return EXIT_FAILURE;
-        case CONFLICTING_OPTIONS:
-            fprintf(stderr, "%s: -%c: option conflicting with %s\n", config.program_name, config.error_option, config.error_arg);
-            return EXIT_FAILURE;
-        case UNEXPECTED_ARGUMENT:
-            fprintf(stderr, "%s: unexpected argument %s\n", config.program_name, config.error_arg);
-            return EXIT_FAILURE;
-        case INSUFFICIENT_MEMORY:
-            fprintf(stderr, "%s: not enough memory\n", config.program_name);
-            return EXIT_FAILURE;
-        case THREAD_ERROR:
-            fprintf(stderr, "%s: unknown thread error\n", config.program_name);
-            return EXIT_FAILURE;
-        case SYSTEM_NOT_SUPPORTED:
-            fprintf(stderr, "%s: system not supported\n", config.program_name);
-            return EXIT_FAILURE;
-        case INTERRUPTED:
-            fprintf(stderr, "%s: interrupted\n", config.program_name);
-            return EXIT_FAILURE;
-        case PERMISSION_DENIED:
-            fprintf(stderr, "%s: permission denied\n", config.program_name);
-            return EXIT_FAILURE;
-        case UNSUPPORTED_ADDRESS_FAMILY:
-            fprintf(stderr, "%s: unsupported address family\n", config.program_name);
-            return EXIT_FAILURE;
-        case FILE_LIMIT_REACHED:
-            fprintf(stderr, "%s: system-wide limit on the number of open files or file descriptors reached\n", config.program_name);
-            return EXIT_FAILURE;
-        case SOCKET_BIND_FAILED:
-            fprintf(stderr, "%s: socket bind failed\n", config.program_name);
-            return EXIT_FAILURE;
-        case PORT_IN_USE:
-            fprintf(stderr, "%s: port %lu is already in use\n", config.program_name, config.port);
-            return EXIT_FAILURE;
-        case FORK_ERROR:
-            fprintf(stderr, "%s: fork error\n", config.program_name);
-            return EXIT_FAILURE;
-        case PIPE_ERROR:
-            fprintf(stderr, "%s: pipe error\n", config.program_name);
-            return EXIT_FAILURE;
-        case UNKNOWN_ERROR:
-            fprintf(stderr, "%s: unknown error\n", config.program_name);
-            return EXIT_FAILURE;
-        default:
-            return EXIT_SUCCESS;
-    }
 }
 
 // ReSharper disable once CppDFAConstantFunctionResult
@@ -149,7 +113,7 @@ void *run_game(void *args) {
         if (keep_challenge) {
             keep_challenge = false;
         } else {
-            SAFE_CALL_FROM_THREAD(chlng_fetch_text(c));
+            SAFE_CALL_OR_HANDLE_AND_RETURN_NULL(chlng_fetch_text(c));
             chlng_hide_word(c);
         }
         snprintf(write_buf, BUFFER_SIZE, "C: %s", c->text);
@@ -217,7 +181,7 @@ int server(void) {
                 return UNSUPPORTED_ADDRESS_FAMILY;
             case EMFILE:
             case ENFILE:
-                return FILE_LIMIT_REACHED;
+                return OPENED_FILES_LIMIT_REACHED;
             case ENOMEM:
                 return INSUFFICIENT_MEMORY;
             case EPROTONOSUPPORT:
@@ -273,7 +237,7 @@ int server(void) {
 }
 
 int main(int argc, char **argv) {
-    SAFE_CALL(parse_flags(argc, argv));
-    SAFE_CALL(server());
+    SAFE_CALL_OR_FAIL(parse_flags(argc, argv));
+    SAFE_CALL_OR_FAIL(server());
     return 0;
 }

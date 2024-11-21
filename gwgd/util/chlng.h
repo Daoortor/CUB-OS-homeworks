@@ -1,7 +1,7 @@
 #ifndef CHLNG_H
 #define CHLNG_H
 
-#define BUFFER_SIZE 1024
+#include "../lib/lib.h"
 
 enum error {
     SUCCESS = 0,
@@ -16,7 +16,7 @@ enum error {
     INTERRUPTED,
     PERMISSION_DENIED,
     UNSUPPORTED_ADDRESS_FAMILY,
-    FILE_LIMIT_REACHED,
+    OPENED_FILES_LIMIT_REACHED,
     SOCKET_BIND_FAILED,
     PORT_IN_USE,
     FORK_ERROR,

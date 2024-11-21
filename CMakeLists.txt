@@ -21,7 +21,15 @@ add_executable(energy-drinks
 )
 
 add_executable(gwgd
-        gwgd/main.c
-        gwgd/chlng.c
-        gwgd/player.c
+        gwgd/app/basic/main.c
+        gwgd/util/chlng.c
+        gwgd/util/player.c
+        gwgd/lib/lib.c
+)
+
+add_executable(gwgd-libevent
+        gwgd/app/libevent/main.c
+        gwgd/util/chlng.c
+        gwgd/util/player.c
+        gwgd/lib/lib.c
 )
