@@ -12,7 +12,7 @@
 #include <netinet/in.h>
 
 struct config config = {
-    BLOCKING, 8888, 0, {}
+    BLOCKING, 8888, 0, {}, {}
 };
 
 int safe_parse_ulong_option(char flag, unsigned long *result) {
@@ -38,6 +38,7 @@ int safe_parse_ulong_option(char flag, unsigned long *result) {
 }
 
 int parse_flags(int argc, char **argv) {
+    strcpy(config.program_name, argv[0]);
     char flag;
     while ((flag = getopt(argc, argv, "tfp:")) != -1) {
         int code;
@@ -75,47 +76,65 @@ int parse_flags(int argc, char **argv) {
     return SUCCESS;
 }
 
-int process_error(char *argv[], enum error error) {
+int process_error(enum error error) {
     switch (error) {
         case INVALID_OPTION:
             return EXIT_FAILURE;
         case ARGUMENT_OUT_OF_RANGE:
-            fprintf(stderr, "%s: -%c: argument %s out of range\n", argv[0], config.error_option, config.error_arg);
+            fprintf(stderr, "%s: -%c: argument %s out of range\n", config.program_name, config.error_option, config.error_arg);
             return EXIT_FAILURE;
         case INVALID_ARGUMENT_VALUE:
-            fprintf(stderr, "%s: -%c: invalid argument %s\n", argv[0], config.error_option, config.error_arg);
+            fprintf(stderr, "%s: -%c: invalid argument %s\n", config.program_name, config.error_option, config.error_arg);
+            return EXIT_FAILURE;
         case CONFLICTING_OPTIONS:
-            fprintf(stderr, "%s: -%c: option conflicting with %s\n", argv[0], config.error_option, config.error_arg);
+            fprintf(stderr, "%s: -%c: option conflicting with %s\n", config.program_name, config.error_option, config.error_arg);
             return EXIT_FAILURE;
         case UNEXPECTED_ARGUMENT:
-            fprintf(stderr, "%s: unexpected argument %s\n", argv[0], config.error_arg);
+            fprintf(stderr, "%s: unexpected argument %s\n", config.program_name, config.error_arg);
             return EXIT_FAILURE;
         case INSUFFICIENT_MEMORY:
-            fprintf(stderr, "%s: not enough memory", argv[0]);
+            fprintf(stderr, "%s: not enough memory\n", config.program_name);
             return EXIT_FAILURE;
         case THREAD_ERROR:
-            fprintf(stderr, "%s: unknown thread error", argv[0]);
+            fprintf(stderr, "%s: unknown thread error\n", config.program_name);
             return EXIT_FAILURE;
         case SYSTEM_NOT_SUPPORTED:
-            fprintf(stderr, "%s: system not supported", argv[0]);
+            fprintf(stderr, "%s: system not supported\n", config.program_name);
+            return EXIT_FAILURE;
         case INTERRUPTED:
-            fprintf(stderr, "%s: interrupted", argv[0]);
+            fprintf(stderr, "%s: interrupted\n", config.program_name);
+            return EXIT_FAILURE;
         case PERMISSION_DENIED:
-            fprintf(stderr, "%s: permission denied", argv[0]);
+            fprintf(stderr, "%s: permission denied\n", config.program_name);
+            return EXIT_FAILURE;
         case UNSUPPORTED_ADDRESS_FAMILY:
-            fprintf(stderr, "%s: unsupported address family", argv[0]);
+            fprintf(stderr, "%s: unsupported address family\n", config.program_name);
+            return EXIT_FAILURE;
         case FILE_LIMIT_REACHED:
-            fprintf(stderr, "%s: system-wide limit on the number of open files or file descriptors reached", argv[0]);
+            fprintf(stderr, "%s: system-wide limit on the number of open files or file descriptors reached\n", config.program_name);
+            return EXIT_FAILURE;
         case SOCKET_BIND_FAILED:
-            fprintf(stderr, "%s: socket bind failed", argv[0]);
+            fprintf(stderr, "%s: socket bind failed\n", config.program_name);
+            return EXIT_FAILURE;
+        case PORT_IN_USE:
+            fprintf(stderr, "%s: port %lu is already in use\n", config.program_name, config.port);
+            return EXIT_FAILURE;
+        case FORK_ERROR:
+            fprintf(stderr, "%s: fork error\n", config.program_name);
+            return EXIT_FAILURE;
+        case PIPE_ERROR:
+            fprintf(stderr, "%s: pipe error\n", config.program_name);
+            return EXIT_FAILURE;
         case UNKNOWN_ERROR:
-            fprintf(stderr, "%s: unknown error", argv[0]);
+            fprintf(stderr, "%s: unknown error\n", config.program_name);
+            return EXIT_FAILURE;
         default:
             return EXIT_SUCCESS;
     }
 }
 
-void *talk(void *args) {
+// ReSharper disable once CppDFAConstantFunctionResult
+void *run_game(void *args) {
     int connfd = ((struct talk_args *)args)->connfd;
     char read_buf[BUFFER_SIZE];
     char write_buf[BUFFER_SIZE];
@@ -125,9 +144,14 @@ void *talk(void *args) {
     int challenge_count = 0;
     int win_count = 0;
     chlng_t *c = chlng_new();
+    bool keep_challenge = false;
     while (1) {
-        chlng_fetch_text(c);
-        chlng_hide_word(c);
+        if (keep_challenge) {
+            keep_challenge = false;
+        } else {
+            SAFE_CALL_FROM_THREAD(chlng_fetch_text(c));
+            chlng_hide_word(c);
+        }
         snprintf(write_buf, BUFFER_SIZE, "C: %s", c->text);
         write(connfd, write_buf, strlen(write_buf));
         char *cur = read_buf;
@@ -147,7 +171,8 @@ void *talk(void *args) {
         }
         *cur = '\0';
         if (cur - read_buf < 2) {
-            snprintf(write_buf, BUFFER_SIZE, "M: invalid response\n");
+            snprintf(write_buf, BUFFER_SIZE, "M: invalid response.\n Responses should be either of the format `R: <guess>` (make a guess) or `Q:<any text>` (exit).\n");
+            keep_challenge = true;
             write(connfd, write_buf, strlen(write_buf));
             continue;
         }
@@ -168,12 +193,14 @@ void *talk(void *args) {
             }
             challenge_count++;
         } else {
-            snprintf(write_buf, BUFFER_SIZE, "M: invalid response\n");
+            snprintf(write_buf, BUFFER_SIZE, "M: invalid response.\n Responses should be either of the format `R: <guess>` (make a guess) or `Q:<any text>` (exit).\n");
+            keep_challenge = true;
             write(connfd, write_buf, strlen(write_buf));
         }
     }
     player_del(player);
     close(connfd);
+    free(args);
     return NULL;
 }
 
@@ -182,6 +209,8 @@ int server(void) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         switch (errno) {
+            case EADDRINUSE:
+                return PORT_IN_USE;
             case EACCES:
                 return PERMISSION_DENIED;
             case EAFNOSUPPORT:
@@ -200,36 +229,45 @@ int server(void) {
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(config.port);
-    if (bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) != 0) {
+    if (bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) != 0 || listen(sockfd, BACKLOG) != 0) {
         return SOCKET_BIND_FAILED;
     }
-    if (listen(sockfd, BACKLOG) != 0) {
-        return SOCKET_BIND_FAILED;
-    }
-    int len = sizeof(cli);
+    socklen_t len = sizeof(cli);
     while (true) {
         int connfd = accept(sockfd, (struct sockaddr*)&cli, &len);
         if (connfd == -1) {
-            return SOCKET_BIND_FAILED;
+            perror("Accept failed");
+            continue;
         }
+        // Freed in run_game()
+        // ReSharper disable once CppDFAMemoryLeak
+        struct talk_args *thread_args = malloc(sizeof(struct talk_args));
+        thread_args->connfd = connfd;
         switch (config.server_mode) {
             case BLOCKING:
-                struct talk_args *blocking_args = malloc(sizeof(struct talk_args));
-                blocking_args->connfd = connfd;
-                talk(blocking_args);
+                run_game(thread_args);
                 break;
             case THREAD:
-                pthread_t *thread = malloc(sizeof(pthread_t));
-                struct talk_args *thread_args = malloc(sizeof(struct talk_args));
-                thread_args->connfd = connfd;
-                const int code = pthread_create(thread, NULL, &talk, thread_args);
+                pthread_t thread;
+                const int code = pthread_create(&thread, NULL, &run_game, thread_args);
                 if (code == EAGAIN) {
+                    // Freed in run_game()
+                    // ReSharper disable once CppDFAMemoryLeak
                     return INSUFFICIENT_MEMORY;
                 }
-                pthread_detach(*thread);
+                pthread_detach(thread);
                 break;
             case FORKING:
-                printf("forking not yet supported\n"); // TODO()
+                pid_t pid = fork();
+                if (pid == 0) {
+                    close(sockfd);
+                    run_game(thread_args);
+                    exit(0);
+                }
+                if (pid < 0) {
+                    return FORK_ERROR;
+                }
+                close(connfd);
         }
     }
 }

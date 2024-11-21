@@ -29,6 +29,6 @@ extern int player_fetch_chlng(player_t* player) {
 
 extern int player_get_greeting(player_t *, char *result) {
     snprintf(result, BUFFER_SIZE,
-        "M: Guess the missing ____!\nM: Send your guess in the form 'R: word\\r\\n'.\n");
+        "M: Guess the missing ____!\nM: Send your guess in the form 'R: <word>'.\n");
     return SUCCESS;
 }

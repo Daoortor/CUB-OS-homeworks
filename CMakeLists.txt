@@ -20,9 +20,6 @@ add_executable(energy-drinks
         energy-drinks/energy-drinks/energy-drinks.c
 )
 
-add_executable(mwc
-        mwc/mwc.c)
-
 add_executable(gwgd
         gwgd/main.c
         gwgd/chlng.c

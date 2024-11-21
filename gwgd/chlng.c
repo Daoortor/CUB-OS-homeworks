@@ -27,15 +27,17 @@ extern void chlng_del(chlng_t *c) {
 extern int chlng_fetch_text(chlng_t *c) {
     FILE *pipe = popen("fortune -s", "r");
     if (pipe == NULL) {
-        return UNKNOWN_ERROR;
+        return PIPE_ERROR;
     }
     char *cur = c->text;
     while (cur - c->text < BUFFER_SIZE && fgets(cur, BUFFER_SIZE - (cur - c->text), pipe)) {
         cur += strlen(cur);
     }
     pclose(pipe);
+    return SUCCESS;
 }
 
+// ReSharper disable once CppDFAConstantFunctionResult
 extern int chlng_hide_word(chlng_t *c) {
     int word_start_indexes[BUFFER_SIZE];
     int *index_cur = word_start_indexes;
