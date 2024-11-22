@@ -13,6 +13,8 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
+struct event_base *event_base;
+
 struct config config = {
     BLOCKING, 8888, 0, {}, {}
 };
@@ -170,10 +172,48 @@ void *run_game(void *args) {
     return NULL;
 }
 
-int server(void) {
-    struct sockaddr_in servaddr, cli;
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1) {
+void cb_func(evutil_socket_t fd, short, void *arg) {
+    struct sockfd_config *conf = arg;
+    int connfd = accept(fd, (struct sockaddr*)&conf->cli, &conf->len);
+    if (connfd == -1) {
+        perror("Accept failed");
+        return;
+    }
+    // Freed in run_game()
+    // ReSharper disable once CppDFAMemoryLeak
+    struct talk_args *thread_args = malloc(sizeof(struct talk_args));
+    thread_args->connfd = connfd;
+    switch (config.server_mode) {
+        case BLOCKING:
+            run_game(thread_args);
+        break;
+        case THREAD:
+            pthread_t thread;
+            const int code = pthread_create(&thread, NULL, &run_game, thread_args);
+            if (code == EAGAIN) {
+                errno = INSUFFICIENT_MEMORY;
+                return;
+            }
+            pthread_detach(thread);
+        break;
+        case FORKING:
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(fd);
+                run_game(thread_args);
+                exit(0);
+            }
+            if (pid < 0) {
+                errno = FORK_ERROR;
+                return;
+            }
+            close(connfd);
+    }
+}
+
+int init_socket(struct sockfd_config *conf, int domain) {
+    conf->sockfd = socket(domain, SOCK_STREAM, 0);
+    if (conf->sockfd == -1) {
         switch (errno) {
             case EADDRINUSE:
                 return PORT_IN_USE;
@@ -192,54 +232,39 @@ int server(void) {
                 return UNKNOWN_ERROR;
         }
     }
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    servaddr.sin_port = htons(config.port);
-    if (bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) != 0 || listen(sockfd, BACKLOG) != 0) {
+    conf->servaddr.sin_family = domain;
+    conf->servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    conf->servaddr.sin_port = htons(config.port);
+    if (bind(conf->sockfd, (struct sockaddr*)&conf->servaddr, sizeof(conf->servaddr)) != 0 || listen(conf->sockfd, BACKLOG) != 0) {
         return SOCKET_BIND_FAILED;
     }
-    socklen_t len = sizeof(cli);
-    while (true) {
-        int connfd = accept(sockfd, (struct sockaddr*)&cli, &len);
-        if (connfd == -1) {
-            perror("Accept failed");
-            continue;
-        }
-        // Freed in run_game()
-        // ReSharper disable once CppDFAMemoryLeak
-        struct talk_args *thread_args = malloc(sizeof(struct talk_args));
-        thread_args->connfd = connfd;
-        switch (config.server_mode) {
-            case BLOCKING:
-                run_game(thread_args);
-                break;
-            case THREAD:
-                pthread_t thread;
-                const int code = pthread_create(&thread, NULL, &run_game, thread_args);
-                if (code == EAGAIN) {
-                    // Freed in run_game()
-                    // ReSharper disable once CppDFAMemoryLeak
-                    return INSUFFICIENT_MEMORY;
-                }
-                pthread_detach(thread);
-                break;
-            case FORKING:
-                pid_t pid = fork();
-                if (pid == 0) {
-                    close(sockfd);
-                    run_game(thread_args);
-                    exit(0);
-                }
-                if (pid < 0) {
-                    return FORK_ERROR;
-                }
-                close(connfd);
-        }
+    conf->len = sizeof(conf->cli);
+    return EXIT_SUCCESS;
+}
+
+int register_listening_sockets() {
+    event_base = event_base_new();
+
+    struct sockfd_config *ipv4_conf = malloc(sizeof(struct sockfd_config));
+    struct sockfd_config *ipv6_conf = malloc(sizeof(struct sockfd_config));
+    if (ipv4_conf == NULL || ipv6_conf == NULL) {
+        return INSUFFICIENT_MEMORY;
     }
+
+    SAFE_CALL_OR_FAIL(init_socket(ipv4_conf, AF_INET));
+    SAFE_CALL_OR_FAIL(init_socket(ipv6_conf, AF_INET6));
+
+    event_new(event_base, ipv4_conf->sockfd, EV_READ | EV_WRITE, cb_func, &ipv4_conf);
+    event_new(event_base, ipv6_conf->sockfd, EV_READ | EV_WRITE, cb_func, &ipv6_conf);
+
+    return EXIT_SUCCESS;
 }
 
 int main(int argc, char **argv) {
     SAFE_CALL_OR_FAIL(parse_flags(argc, argv));
-    SAFE_CALL_OR_FAIL(server());
-    return 0;
+    SAFE_CALL_OR_FAIL(register_listening_sockets());
+    while (errno == EXIT_SUCCESS) {}
+    process_error(errno, error_handlers);
+    event_base_free(event_base);
+    return EXIT_FAILURE;
 }

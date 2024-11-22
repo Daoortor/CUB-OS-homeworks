@@ -33,3 +33,7 @@ add_executable(gwgd-libevent
         gwgd/util/player.c
         gwgd/lib/lib.c
 )
+
+target_compile_definitions(gwgd-libevent
+        PRIVATE levent lpthread levent_pthreads
+)
