@@ -3,6 +3,9 @@ project(cub_os_hw C)
 
 set(CMAKE_C_STANDARD 11)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBEVENT REQUIRED libevent)
+
 add_executable(env
         env/env.c
 )
@@ -34,6 +37,5 @@ add_executable(gwgd-libevent
         gwgd/lib/lib.c
 )
 
-target_compile_definitions(gwgd-libevent
-        PRIVATE levent lpthread levent_pthreads
-)
+target_include_directories(gwgd-libevent PRIVATE ${LIBEVENT_INCLUDE_DIRS})
+target_link_libraries(gwgd-libevent PRIVATE ${LIBEVENT_LIBRARIES})
